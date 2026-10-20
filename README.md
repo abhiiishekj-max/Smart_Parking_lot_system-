@@ -1,4 +1,4 @@
 author ABHISHEK Jaiswal
 <br>
-making a project about scam detection from call and message
+making a project about Smart Parking lot System
 <br>
