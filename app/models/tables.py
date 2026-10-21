@@ -10,6 +10,7 @@ from app.domain.vehicle_type import VehicleType
 
 def enum_column(enum_class):
     return Enum(
+        enum_class,
         native_enum =False,
         values_callable = lambda members:[m.value for m in members],
     )
