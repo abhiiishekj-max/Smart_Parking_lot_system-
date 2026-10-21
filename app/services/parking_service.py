@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func , select
 from sqlalchemy.orm import Session
 
 from app.domain.allocation import SpotAllocator
@@ -102,4 +102,54 @@ class ParkingService:
             key = spot.spot_type.value
             counts[key] = counts.get(key,0) +1
         return counts
-    
+
+    def status(self, db: Session) -> dict:
+        open_rows = db.execute(
+            select(SessionRecord, VehicleRecord)
+            .join(VehicleRecord, SessionRecord.vehicle_id == VehicleRecord.id)
+            .where(SessionRecord.exit_time.is_(None))
+        ).all()
+        parked = {ticket.spot_id: (ticket, vehicle) for ticket, vehicle in open_rows}
+
+        spots = []
+        all_spots = select(SpotRecord).order_by(SpotRecord.floor, SpotRecord.number)
+        for spot in db.scalars(all_spots):
+            ticket, vehicle = parked.get(spot.id, (None, None))
+            spots.append(
+                {
+                    "id": spot.id,
+                    "floor": spot.floor,
+                    "number": spot.number,
+                    "spot_type": spot.spot_type.value,
+                    "plate": vehicle.registration_number if vehicle else None,
+                    "vehicle_type": vehicle.vehicle_type.value if vehicle else None,
+                    "entry_time": ticket.entry_time if ticket else None,
+                }
+            )
+
+        done_rows = db.execute(
+            select(SessionRecord, VehicleRecord)
+            .join(VehicleRecord, SessionRecord.vehicle_id == VehicleRecord.id)
+            .where(SessionRecord.exit_time.is_not(None))
+            .order_by(SessionRecord.exit_time.desc())
+            .limit(10)
+        ).all()
+        history = [
+            {
+                "plate": vehicle.registration_number,
+                "vehicle_type": vehicle.vehicle_type.value,
+                "entry_time": ticket.entry_time,
+                "exit_time": ticket.exit_time,
+                "fee": str(ticket.fee_amount),
+            }
+            for ticket, vehicle in done_rows
+        ]
+
+        revenue = db.scalar(select(func.coalesce(func.sum(SessionRecord.fee_amount), 0)))
+        return {
+            "total_spots": len(spots),
+            "occupied_spots": len(parked),
+            "revenue": str(revenue),
+            "spots": spots,
+            "history": history,
+        }

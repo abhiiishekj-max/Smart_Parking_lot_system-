@@ -18,7 +18,7 @@ app = FastAPI(title="Smart Parking Lot")
 service= ParkingService(SpotAllocator(LowestFloorFirstStrategy()))
 
 def get_db():
-    with Sessionlocal() as db:
+    with SessionLocal() as db:
         yield db
 
 
@@ -62,3 +62,8 @@ def check_out(body:CheckOutRequest,db:Session=Depends(get_db)):
 @app.get("/availibility")
 def availibilty (db:Session= Depends(get_db)):
     return service.avaliability(db)
+
+
+@app.get("/status")
+def status(db: Session = Depends(get_db)):
+    return service.status(db)
