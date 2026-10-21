@@ -70,3 +70,5 @@ def test_check_out_charges_fee_and_frees_spot(db, service):
 def test_check_out_without_check_in_fails(db, service):
     with pytest.raises(NoActiveSessionError):
         service.check_out(db, "UNKNOWN")
+
+        

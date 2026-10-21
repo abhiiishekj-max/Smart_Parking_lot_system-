@@ -94,3 +94,12 @@ class ParkingService:
             ParkingSpot(id=r.id, floor=r.floor, number=r.number, spot_type=r.spot_type)
             for r in rows
         ]
+
+
+    def avaliability (self,db:Session) -> dict[str,int]:
+        counts : dict[str,int]={}
+        for spot in self._free_spots(db):
+            key = spot.spot_type.value
+            counts[key] = counts.get(key,0) +1
+        return counts
+    
