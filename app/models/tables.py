@@ -43,7 +43,7 @@ class VehicleRecord(Base):
 
 
 class SessionRecord(Base):
-    __tablename__="parking_session"
+    __tablename__="parking_sessions"
 
     id:Mapped[int] = mapped_column(primary_key=True)
     vehicle_id:Mapped[int] = mapped_column(ForeignKey("vehicles.id"))
