@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import func , select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.domain.allocation import SpotAllocator
@@ -26,60 +27,14 @@ class ParkingService:
     def __init__(self, allocator: SpotAllocator):
         self._allocator = allocator
 
-    def check_in(
-        self, db: Session, registration_number: str, vehicle_type: VehicleType
-    ) -> SessionRecord:
-        vehicle = self._get_or_create_vehicle(db, registration_number, vehicle_type)
-        if self._open_session_for(db, vehicle.id) is not None:
-            raise VehicleAlreadyParkedError(registration_number)
-
-        spot = self._allocator.allocate(vehicle_type, self._free_spots(db))
-        if spot is None:
-            raise LotFullError(f"No free spot for {vehicle_type.value}")
-
-        ticket = SessionRecord(
-            vehicle_id=vehicle.id,
-            spot_id=spot.id,
-            entry_time=datetime.now(timezone.utc),
-        )
-        db.add(ticket)
-        db.commit()
-        return ticket
-
-    def check_out(self, db: Session, registration_number: str) -> SessionRecord:
-        vehicle = db.scalars(
+    def _find_vehicle(self, db: Session, registration_number: str):
+        return db.scalars(
             select(VehicleRecord).where(
                 VehicleRecord.registration_number == registration_number
             )
         ).first()
-        ticket = self._open_session_for(db, vehicle.id) if vehicle else None
-        if ticket is None:
-            raise NoActiveSessionError(registration_number)
 
-        rates = {r.vehicle_type: r.hourly_rate for r in db.scalars(select(RateRecord))}
-        exit_time = datetime.now(timezone.utc)
-        ticket.fee_amount = HourlyFeeStrategy(rates).calculate(
-            ticket.entry_time, exit_time, vehicle.vehicle_type
-        )
-        ticket.exit_time = exit_time
-        db.commit()
-        return ticket
-
-    def _get_or_create_vehicle(self, db, registration_number, vehicle_type):
-        vehicle = db.scalars(
-            select(VehicleRecord).where(
-                VehicleRecord.registration_number == registration_number
-            )
-        ).first()
-        if vehicle is None:
-            vehicle = VehicleRecord(
-                registration_number=registration_number, vehicle_type=vehicle_type
-            )
-            db.add(vehicle)
-            db.flush()
-        return vehicle
-
-    def _open_session_for(self, db, vehicle_id):
+    def _open_session_for(self, db: Session, vehicle_id: int):
         return db.scalars(
             select(SessionRecord).where(
                 SessionRecord.vehicle_id == vehicle_id,
@@ -87,20 +42,21 @@ class ParkingService:
             )
         ).first()
 
-    def _free_spots(self, db) -> list[ParkingSpot]:
+    def _free_spots(self, db: Session) -> list[ParkingSpot]:
         occupied = select(SessionRecord.spot_id).where(SessionRecord.exit_time.is_(None))
-        rows = db.scalars(select(SpotRecord).where(SpotRecord.id.not_in(occupied)))
+        rows = db.scalars(
+            select(SpotRecord).where(SpotRecord.id.not_in(occupied)).with_for_update()
+        )
         return [
             ParkingSpot(id=r.id, floor=r.floor, number=r.number, spot_type=r.spot_type)
             for r in rows
         ]
 
-
-    def avaliability (self,db:Session) -> dict[str,int]:
-        counts : dict[str,int]={}
+    def availability(self, db: Session) -> dict[str, int]:
+        counts: dict[str, int] = {}
         for spot in self._free_spots(db):
             key = spot.spot_type.value
-            counts[key] = counts.get(key,0) +1
+            counts[key] = counts.get(key, 0) + 1
         return counts
 
     def status(self, db: Session) -> dict:
@@ -110,7 +66,6 @@ class ParkingService:
             .where(SessionRecord.exit_time.is_(None))
         ).all()
         parked = {ticket.spot_id: (ticket, vehicle) for ticket, vehicle in open_rows}
-
         spots = []
         all_spots = select(SpotRecord).order_by(SpotRecord.floor, SpotRecord.number)
         for spot in db.scalars(all_spots):
@@ -126,7 +81,6 @@ class ParkingService:
                     "entry_time": ticket.entry_time if ticket else None,
                 }
             )
-
         done_rows = db.execute(
             select(SessionRecord, VehicleRecord)
             .join(VehicleRecord, SessionRecord.vehicle_id == VehicleRecord.id)
@@ -144,7 +98,6 @@ class ParkingService:
             }
             for ticket, vehicle in done_rows
         ]
-
         revenue = db.scalar(select(func.coalesce(func.sum(SessionRecord.fee_amount), 0)))
         return {
             "total_spots": len(spots),
@@ -153,3 +106,49 @@ class ParkingService:
             "spots": spots,
             "history": history,
         }
+
+    def check_in(
+        self, db: Session, registration_number: str, vehicle_type: VehicleType
+    ) -> SessionRecord:
+        vehicle = self._get_or_create_vehicle(db, registration_number, vehicle_type)
+        if self._open_session_for(db, vehicle.id) is not None:
+            raise VehicleAlreadyParkedError(registration_number)
+        spot = self._allocator.allocate(vehicle_type, self._free_spots(db))
+        if spot is None:
+            raise LotFullError(f"No free spot for {vehicle_type.value}")
+        ticket = SessionRecord(
+            vehicle_id=vehicle.id,
+            spot_id=spot.id,
+            entry_time=datetime.now(timezone.utc),
+        )
+        db.add(ticket)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise LotFullError(f"No free spot for {vehicle_type.value}")
+        return ticket
+
+    def check_out(self, db: Session, registration_number: str) -> SessionRecord:
+        vehicle = self._find_vehicle(db, registration_number)
+        ticket = self._open_session_for(db, vehicle.id) if vehicle else None
+        if ticket is None:
+            raise NoActiveSessionError(registration_number)
+        rates = {r.vehicle_type: r.hourly_rate for r in db.scalars(select(RateRecord))}
+        exit_time = datetime.now(timezone.utc)
+        ticket.fee_amount = HourlyFeeStrategy(rates).calculate(
+            ticket.entry_time, exit_time, vehicle.vehicle_type
+        )
+        ticket.exit_time = exit_time
+        db.commit()
+        return ticket
+
+    def _get_or_create_vehicle(self, db, registration_number, vehicle_type):
+        vehicle = self._find_vehicle(db, registration_number)
+        if vehicle is None:
+            vehicle = VehicleRecord(
+                registration_number=registration_number, vehicle_type=vehicle_type
+            )
+            db.add(vehicle)
+            db.flush()
+        return vehicle
