@@ -1,6 +1,8 @@
 from fastapi import Depends,FastAPI,HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from pathlib import Path
+from fastapi.responses import FileResponse
 
 from app.database import SessionLocal 
 from app.domain.allocation import LowestFloorFirstStrategy,SpotAllocator
@@ -67,3 +69,12 @@ def availibilty (db:Session= Depends(get_db)):
 @app.get("/status")
 def status(db: Session = Depends(get_db)):
     return service.status(db)
+
+STATIC_DIR =Path(__file__).parent /"static"
+
+
+@app.get("/", include_in_schema=False)
+def dashboard():
+    return FileResponse(STATIC_DIR / "dashboard.html")
+
+

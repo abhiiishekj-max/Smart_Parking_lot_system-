@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Parking Lot</title>
+<style>
+:root{--road:#2a3038;--paper:#eef1f3;--line:#cfd6dc;--sign:#0b5fb0;--paint:#f2b705;--ok:#13703a;--err:#b3261e;--muted:#5d6975}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--road);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1080px;margin:0 auto;padding:24px 16px 56px}
+header{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:flex-end;border-bottom:3px solid var(--road);padding-bottom:14px;margin-bottom:18px}
+h1{margin:0;font-size:28px;letter-spacing:-.01em}
+.sub{margin:2px 0 0;color:var(--muted)}
+.meter{min-width:240px;flex:1;max-width:380px}
+.meter p{margin:0 0 6px;font-weight:600}
+.bar{height:12px;background:#fff;border:1px solid var(--road);overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--road);transition:width .4s}
+.strip{display:flex;flex-wrap:wrap;margin-bottom:20px;border:1px solid var(--line);background:#fff}
+.strip div{flex:1 1 150px;padding:10px 14px;border-right:1px solid var(--line)}
+.strip div:last-child{border-right:0}
+.strip b{display:block;font-size:22px}
+.strip span{color:var(--muted);font-size:13px}
+.actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:20px}
+fieldset{margin:0;border:1px solid var(--line);background:#fff;padding:12px 14px}
+legend{font-weight:700;padding:0 6px}
+form{display:flex;flex-wrap:wrap;gap:8px}
+input,select,button{font:inherit;padding:9px 11px;border:1px solid var(--road);border-radius:3px;background:#fff;color:var(--road)}
+input{flex:1;min-width:140px;text-transform:uppercase}
+button{background:var(--sign);border-color:var(--sign);color:#fff;font-weight:600;cursor:pointer}
+button.out{background:var(--road);border-color:var(--road)}
+:focus-visible{outline:3px solid var(--paint);outline-offset:1px}
+#msg{min-height:26px;margin:10px 0 4px;font-weight:600}
+.ok{color:var(--ok)}.err{color:var(--err)}
+h2{font-size:18px;margin:22px 0 8px}
+.hint{color:var(--muted);margin:0 0 6px;font-size:13px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(98px,1fr));gap:8px}
+.bay{border:2px dashed var(--sign);background:#fff;min-height:74px;padding:6px 8px;font-size:12px;color:var(--muted)}
+.bay b{display:block;font-size:14px;color:var(--road)}
+.bay.busy{border:2px solid var(--road);background:var(--road);color:#cbd3da;cursor:pointer}
+.bay.busy b{color:#fff}
+.plate{display:inline-block;margin-top:4px;padding:1px 6px;background:var(--paint);color:#111;font-weight:700;border-radius:2px;word-break:break-all}
+.tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(380px,100%),1fr));gap:24px}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--muted);font-weight:600}
+.empty{color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div>
+    <h1>Smart Parking Lot</h1>
+    <p class="sub">Live view of spots, vehicles and fees. Updates every 3 seconds.</p>
+  </div>
+  <div class="meter">
+    <p id="occ-text">Loading…</p>
+    <div class="bar"><i id="occ-bar"></i></div>
+  </div>
+</header>
+
+<section class="strip" aria-label="Free spots and revenue">
+  <div><b id="s-small">–</b><span>Free for motorcycles (small)</span></div>
+  <div><b id="s-medium">–</b><span>Free for cars (medium)</span></div>
+  <div><b id="s-large">–</b><span>Free for buses (large)</span></div>
+  <div><b id="s-rev">–</b><span>Fees collected</span></div>
+</section>
+
+<section class="actions">
+  <fieldset>
+    <legend>Vehicle arrives</legend>
+    <form id="in-form">
+      <input id="in-plate" placeholder="Plate, e.g. KA01AB1234" required aria-label="Registration number">
+      <select id="in-type" aria-label="Vehicle type">
+        <option value="motorcycle">Motorcycle</option>
+        <option value="car" selected>Car</option>
+        <option value="bus">Bus</option>
+      </select>
+      <button>Check in</button>
+    </form>
+  </fieldset>
+  <fieldset>
+    <legend>Vehicle leaves</legend>
+    <form id="out-form">
+      <input id="out-plate" placeholder="Plate, or click a taken spot" required aria-label="Registration number">
+      <button class="out">Check out</button>
+    </form>
+  </fieldset>
+</section>
+<p id="msg" role="status"></p>
+
+<section>
+  <p class="hint">Dashed blue spots are free. Dark spots are taken; click one to fill the check-out box.</p>
+  <div id="floors"></div>
+</section>
+
+<section class="tables">
+  <div>
+    <h2>Parked now</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Plate</th><th>Type</th><th>Spot</th><th>Arrived</th><th>Stayed</th></tr></thead>
+      <tbody id="parked"></tbody>
+    </table></div>
+  </div>
+  <div>
+    <h2>Recent exits</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Plate</th><th>Type</th><th>Left</th><th>Fee</th></tr></thead>
+      <tbody id="history"></tbody>
+    </table></div>
+  </div>
+</section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const clock = iso => new Date(iso).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+
+function stayed(iso) {
+  const m = Math.max(0, Math.floor((Date.now() - new Date(iso)) / 60000));
+  return m < 60 ? m + ' min' : Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+}
+function say(text, ok) {
+  const el = $('msg');
+  el.textContent = text;
+  el.className = ok ? 'ok' : 'err';
+}
+
+async function load() {
+  try {
+    const res = await fetch('/status');
+    render(await res.json());
+  } catch (e) {
+    say('Cannot reach the server. Is uvicorn running?', false);
+  }
+}
+
+function render(d) {
+  const free = d.spots.filter(s => !s.plate);
+  $('occ-text').textContent = d.occupied_spots + ' of ' + d.total_spots + ' spots taken';
+  $('occ-bar').style.width = (d.total_spots ? d.occupied_spots / d.total_spots * 100 : 0) + '%';
+  for (const t of ['small', 'medium', 'large']) {
+    $('s-' + t).textContent = free.filter(s => s.spot_type === t).length;
+  }
+  $('s-rev').textContent = d.revenue;
+
+  const floors = {};
+  d.spots.forEach(s => (floors[s.floor] = floors[s.floor] || []).push(s));
+  $('floors').innerHTML = Object.keys(floors).map(f =>
+    '<h2>Floor ' + f + '</h2><div class="grid">' +
+    floors[f].map(s =>
+      '<div class="bay' + (s.plate ? ' busy" data-plate="' + esc(s.plate) : '') + '">' +
+      '<b>#' + s.number + '</b>' + s.spot_type +
+      (s.plate ? '<br><span class="plate">' + esc(s.plate) + '</span>' : '') +
+      '</div>').join('') +
+    '</div>').join('');
+
+  const parked = d.spots.filter(s => s.plate);
+  $('parked').innerHTML = parked.length
+    ? parked.map(s => '<tr><td>' + esc(s.plate) + '</td><td>' + s.vehicle_type + '</td><td>Floor ' + s.floor +
+        ', #' + s.number + '</td><td>' + clock(s.entry_time) + '</td><td>' + stayed(s.entry_time) + '</td></tr>').join('')
+    : '<tr><td colspan="5" class="empty">No vehicles inside. Check one in above.</td></tr>';
+  $('history').innerHTML = d.history.length
+    ? d.history.map(h => '<tr><td>' + esc(h.plate) + '</td><td>' + h.vehicle_type + '</td><td>' +
+        clock(h.exit_time) + '</td><td>' + h.fee + '</td></tr>').join('')
+    : '<tr><td colspan="4" class="empty">No exits yet.</td></tr>';
+}
+
+async function send(url, body, okText) {
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) say(okText(data), true);
+    else say(typeof data.detail === 'string' ? data.detail : 'Check the plate and vehicle type, then try again.', false);
+  } catch (e) {
+    say('Cannot reach the server. Is uvicorn running?', false);
+  }
+  load();
+}
+
+$('in-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const plate = $('in-plate').value.trim().toUpperCase();
+  send('/check-in', {registration_number: plate, vehicle_type: $('in-type').value},
+       d => plate + ' checked in (ticket ' + d.ticket_id + ')');
+  $('in-plate').value = '';
+});
+$('out-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const plate = $('out-plate').value.trim().toUpperCase();
+  send('/check-out', {registration_number: plate}, d => plate + ' checked out. Fee: ' + d.fee);
+  $('out-plate').value = '';
+});
+$('floors').addEventListener('click', e => {
+  const bay = e.target.closest('.bay.busy');
+  if (bay) $('out-plate').value = bay.dataset.plate;
+});
+
+load();
+setInterval(load, 3000);
+</script>
+</body>
+</html>
